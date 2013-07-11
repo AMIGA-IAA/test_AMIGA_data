@@ -6,7 +6,7 @@ import urllib2
 import os
 from astropy.io.votable import parse_single_table
 from astropy.io import ascii
-from astropy import coordinates
+from astropy import coordinates, units
 
 # Workaround for PyCharm
 os.environ['LC_CTYPE'] = 'es_ES.UTF-8'
@@ -43,7 +43,7 @@ def get_url(url,local_file):
 #     def test_read_table(self):
 #         vo_table = parse(self.vo_table_raw)
 
-class TestVOTable(unittest.TestCase):
+class TestVOTableAMIGA0(unittest.TestCase):
 
     def setUp(self):
         ### Online version of the AMIGA VOTable
@@ -58,15 +58,29 @@ class TestVOTable(unittest.TestCase):
         if not os.path.exists(self.local_cache):
             os.makedirs(self.local_cache)
 
+        #Load AMIGA0 data
+        url_coordinates = "http://amiga.iaa.es/FCKeditor/UserFiles/File/ASCII/AMIGA_0/table1.dat"
+        url_coordinates_readme = "http://amiga.iaa.es/FCKeditor/UserFiles/File/ASCII/AMIGA_0/ReadMe"
+        local_coordinates = "%s/table1.dat"%self.local_cache
+        local_coordinates_readme = "%s/Readme"%self.local_cache
+        get_url(url_coordinates,local_coordinates)
+        get_url(url_coordinates_readme,local_coordinates_readme)
+        self.table = ascii.read(local_coordinates,readme=local_coordinates_readme)
+
+    def tearDown(self):
+        # Remove the temporary storage directory
+        if os.path.exists(self.local_cache):
+            os.system("rm -rf %s"%self.local_cache)
+
     def test_size(self):
         """
         Check that we have 1051 rows
         """
         self.assertEqual(self.vo_table.size,1051)
 
-    def test_coordinates(self):
+    def test_coordinates_J2000(self):
         """
-        Compare the coordinates (AMIGA 0).
+        Compare the J2000 coordinates (AMIGA 0).
         Relevant columns in the VO table:
           * 'RA J2000'
           * 'DEC J2000'
@@ -80,31 +94,34 @@ class TestVOTable(unittest.TestCase):
           * 'DEs'
         """
         # Number of decimal places to match
-        n_places = 6
+        n_places = 3
+        # Separation in arcsec to match
+        max_separation = 0.5
 
-        url_coordinates = "http://amiga.iaa.es/FCKeditor/UserFiles/File/ASCII/AMIGA_0/table1.dat"
-        url_coordinates_readme = "http://amiga.iaa.es/FCKeditor/UserFiles/File/ASCII/AMIGA_0/ReadMe"
-        local_coordinates = "%s/table1.dat"%self.local_cache
-        local_coordinates_readme = "%s/Readme"%self.local_cache
-        get_url(url_coordinates,local_coordinates)
-        get_url(url_coordinates_readme,local_coordinates_readme)
-        table = ascii.read(local_coordinates,readme=local_coordinates_readme)
+        # Workaround depending on the astropy version
+        # <= 0.2 uses arrays and >= 0.3 uses masked arrays
+        from astropy import version
+        if int(version.major) == 0 and int(version.minor) <= 2:
+            dec_sign = self.table['DE-']
+        else:
+            dec_sign = self.table['DE-'].filled('')
 
         for i in range(self.vo_table.size):
             coords = coordinates.FK5Coordinates('%02ih%02im%05.2fs %s%02id%02im%04.1fs'%
-                                                (table['RAh'][i],table['RAm'][i],
-                                                 table['RAs'][i],table['DE-'][i],
-                                                 table['DEd'][i],table['DEm'][i],
-                                                 table['DEs'][i]))
-            #self.assertEqual(self.vo_table['RA J2000'][i],coords.ra.degrees)
-            #self.assertEqual(self.vo_table['DEC J2000'][i],coords.dec.degrees)
+                                                (self.table['RAh'][i],self.table['RAm'][i],
+                                                 self.table['RAs'][i],dec_sign[i],
+                                                 self.table['DEd'][i],self.table['DEm'][i],
+                                                 self.table['DEs'][i]))
+            coordsVO = coordinates.FK5Coordinates(ra=self.vo_table['RA J2000'][i],
+                                           dec=self.vo_table['DEC J2000'][i],
+                                           unit=(units.degree,units.degree))
+
             self.assertAlmostEqual(self.vo_table['RA J2000'][i],coords.ra.degrees,places=n_places)
             self.assertAlmostEqual(self.vo_table['DEC J2000'][i],coords.dec.degrees,places=n_places)
 
-    def tearDown(self):
-        # Remove the temporary storage directory
-        if os.path.exists(self.local_cache):
-            os.system("rm -rf %s"%self.local_cache)
+            separation = coords.separation(coordsVO).degrees*3600.
+            self.assertLess(separation,max_separation)
+
 
 if __name__ == '__main__':
   unittest.main()
